@@ -1,21 +1,26 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Claw Machine Game</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Claw Machine Game</title>
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-    <div id="ui1">
-        <button id="forward">⬆</button>
-    </div>
-    <div id="ui2">
-        <button id="left">⬅</button>
-        <button id="backward">⬇</button>
-        <button id="right">➡</button>
-        <button id="drop">Grab!</button>
-    </div>
-    <script type="module" src="main.js"></script>
+  <div id="ui1">
+    <button id="forward">⬆</button>
+  </div>
+  <div id="ui2">
+    <button id="left">⬅</button>
+    <button id="backward">⬇</button>
+    <button id="right">➡</button>
+    <button id="drop">Grab!</button>
+  </div>
+  <!-- Joystick container for mobile control -->
+  <div id="joystickContainer"></div>
+
+  <!-- Include nipplejs from a CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.9.0/nipplejs.min.js"></script>
+  <script type="module" src="main.js"></script>
 </body>
 </html>
