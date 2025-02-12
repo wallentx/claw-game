@@ -1,0 +1,17 @@
+{
+  "name": "claw-machine-game",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "run": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "cannon-es": "^0.20.0",
+    "express": "^4.19.2",
+    "three": "^0.167.0"
+  }
+}

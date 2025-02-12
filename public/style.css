@@ -1,0 +1,40 @@
+body {
+    margin: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    background-color: #f0f0f0;
+    position: relative;
+}
+
+canvas {
+    display: block;
+}
+
+#ui1, #ui2 {
+    position: absolute;
+    display: flex;
+    justify-content: center;
+    width: 100%;
+}
+
+#ui1 {
+    bottom: 55px;
+    left: 48.1%;
+    transform: translateX(-50%);
+}
+
+#ui2 {
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+#ui2 button {
+    margin: 0 5px;
+}
+
+#backward {
+    margin-top: -20px;
+}
