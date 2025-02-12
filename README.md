@@ -1,4 +1,7 @@
-# Claw Machine Game
+<p align="center">
+<img src="https://github.com/user-attachments/assets/b52f0314-7551-4d02-950f-e50f0d39548d" alt="Claw Machine Game" width="500">
+<h1 align="center">Claw Machine Game</h2>
+</p>
 
 This project was developed under the guidance of LLMs. It's purpose is to serve as a mile-marker to show what AI assisted development is capable of.
 This is a claw machine game built using [Three.js](https://threejs.org/) for 3D rendering and [Cannon-es](https://github.com/pmndrs/cannon-es) for physics simulation. It simulates a traditional claw machine complete with a movable gantry, a physics-driven claw (represented as a cone with pivoting arms), and prizes that the claw can attempt to grab.
