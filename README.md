@@ -26,7 +26,7 @@ This project exists as a mile-marker in the evolution of AI-assisted software de
 ### 1. Clone the Repository:
 ```bash
 git clone <repository-url>
-cd claw-machine-game
+cd claw-game
 ```
 
 ### 2. Install Dependencies:
