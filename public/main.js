@@ -102,7 +102,21 @@ function init() {
 
     // Grab button (works for both mouse and touch)
     grabButton.addEventListener('click', () => dropClaw());
-    grabButton.addEventListener('touchstart', (e) => { e.preventDefault(); dropClaw(); });
+    leftButton.addEventListener('touchstart', () => startMoving('left'));
+    leftButton.addEventListener('touchend', () => stopMoving());
+
+    rightButton.addEventListener('touchstart', () => startMoving('right'));
+    rightButton.addEventListener('touchend', () => stopMoving());
+
+    forwardButton.addEventListener('touchstart', () => startMoving('forward'));
+    forwardButton.addEventListener('touchend', () => stopMoving());
+
+    backwardButton.addEventListener('touchstart', () => startMoving('backward'));
+    backwardButton.addEventListener('touchend', () => stopMoving());
+
+    // Grab button (works for both mouse and touch)
+    grabButton.addEventListener('click', () => dropClaw());
+    grabButton.addEventListener('touchstart', () => dropClaw());
 
     window.addEventListener('mouseup', stopMoving);
 
