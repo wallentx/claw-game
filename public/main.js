@@ -102,21 +102,7 @@ function init() {
 
     // Grab button (works for both mouse and touch)
     grabButton.addEventListener('click', () => dropClaw());
-    leftButton.addEventListener('touchstart', () => startMoving('left'));
-    leftButton.addEventListener('touchend', () => stopMoving());
-
-    rightButton.addEventListener('touchstart', () => startMoving('right'));
-    rightButton.addEventListener('touchend', () => stopMoving());
-
-    forwardButton.addEventListener('touchstart', () => startMoving('forward'));
-    forwardButton.addEventListener('touchend', () => stopMoving());
-
-    backwardButton.addEventListener('touchstart', () => startMoving('backward'));
-    backwardButton.addEventListener('touchend', () => stopMoving());
-
-    // Grab button (works for both mouse and touch)
-    grabButton.addEventListener('click', () => dropClaw());
-    grabButton.addEventListener('touchstart', () => dropClaw());
+    grabButton.addEventListener('touchstart', (e) => { e.preventDefault(); dropClaw(); });
 
     window.addEventListener('mouseup', stopMoving);
 
@@ -190,22 +176,6 @@ function init() {
             } else {
               startMoving('forward');
             }
-          let newDirection;
-          if (Math.abs(x) > Math.abs(y)) {
-            if (x > 0) {
-              newDirection = 'right';
-            } else {
-              newDirection = 'left';
-            }
-          } else {
-            if (y > 0) {
-              newDirection = 'backward';
-            } else {
-              newDirection = 'forward';
-            }
-          }
-          if (moveDirection !== newDirection) {
-            startMoving(newDirection);
           }
         }
       });
