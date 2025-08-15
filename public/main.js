@@ -190,6 +190,22 @@ function init() {
             } else {
               startMoving('forward');
             }
+          let newDirection;
+          if (Math.abs(x) > Math.abs(y)) {
+            if (x > 0) {
+              newDirection = 'right';
+            } else {
+              newDirection = 'left';
+            }
+          } else {
+            if (y > 0) {
+              newDirection = 'backward';
+            } else {
+              newDirection = 'forward';
+            }
+          }
+          if (moveDirection !== newDirection) {
+            startMoving(newDirection);
           }
         }
       });
