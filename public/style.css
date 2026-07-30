@@ -1,40 +1,73 @@
+/* Ensure the canvas fills the viewport */
 body {
-    margin: 0;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;
-    background-color: #f0f0f0;
-    position: relative;
+  margin: 0;
+  overflow: hidden;
+  background-color: #f0f0f0;
 }
 
+/* The Three.js canvas is inserted dynamically */
 canvas {
-    display: block;
+  display: block;
 }
 
-#ui1, #ui2 {
-    position: absolute;
-    display: flex;
-    justify-content: center;
-    width: 100%;
+/* UI containers */
+#ui1,
+#ui2,
+#joystickContainer {
+  position: absolute;
+  z-index: 10;
 }
 
+/* Directional button container */
 #ui1 {
-    bottom: 55px;
-    left: 48.1%;
-    transform: translateX(-50%);
+  bottom: 15%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  justify-content: center;
 }
 
+/* Other buttons container */
 #ui2 {
-    bottom: 20px;
-    left: 50%;
-    transform: translateX(-50%);
+  bottom: 5%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
+/* Style for all buttons (except drop may be overridden) */
 #ui2 button {
-    margin: 0 5px;
+  margin: 0 10px;
+  font-size: 1.5rem;
+  padding: 10px;
+  border: none;
+  background: #ddd;
+  border-radius: 8px;
 }
 
-#backward {
-    margin-top: -20px;
+#ui2 button:active {
+  background: #bbb;
+}
+
+/* Red circle Grab button */
+#drop {
+  background: red;
+  color: white;
+  border-radius: 50%;
+  width: 60px;
+  height: 60px;
+  font-size: 1rem;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/* Joystick container in the bottom left */
+#joystickContainer {
+  bottom: 5%;
+  left: 5%;
+  width: 150px;
+  height: 150px;
 }
