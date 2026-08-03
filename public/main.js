@@ -1,50 +1,38 @@
 import * as THREE from './libs/three.module.js';
 import * as CANNON from './libs/cannon-es.js';
 
-let scene, camera, renderer, clawGantry, clawBase, clawArms = [], clawMachine, prizes = [], cord;
-let clawSpeed = 200; // Adjust speed to account for force application
+let scene, camera, renderer, clawGantry, clawBase, clawMachine, prizes = [], cord, clawGroup;
+let clawSpeed = 5; // Switched to velocity-based movement
 let dropSpeed = 0.1;
 let moveDirection = null;
 const clawLimits = { x: [-4.375, 4.375], z: [-4.375, 4.375] };
-const armLength = 1;
 let grabButton;
 
-// A constant for shifting the COM downward (for bottom-heavy behavior).
-const comShift = 0.2;
-
 let world, gantryBody, clawBody, prizeBodies = [], hangConstraint, cableLength = 1;
-let initialCableLength = 0; // Store the initial cable length
+let initialCableLength = 0;
 
-// --- Helper function to create a cone shape as a ConvexPolyhedron ---
-// The cone's tip is at (0, height/2, 0) and the base vertices are at (x, -height/2, z).
-// Here we order the faces so that normals point outward.
-function createConeShape(height, radius, numSegments) {
-  const vertices = [];
+// --- For the new functional claw ---
+let armBodies = [];
+let armMeshes = [];
+let armConstraints = [];
+
+// --- Helper function to create a cone shape for Cannon-es ---
+function createConeShape(radius, height, numSegments) {
+  const vertices = [new CANNON.Vec3(0, height / 2, 0)];
   const faces = [];
-  // Tip vertex.
-  vertices.push(new CANNON.Vec3(0, height / 2, 0));
-  // Bottom circle vertices at y = -height/2.
   for (let i = 0; i < numSegments; i++) {
-    const theta = (2 * Math.PI * i) / numSegments;
-    const x = radius * Math.cos(theta);
-    const z = radius * Math.sin(theta);
-    vertices.push(new CANNON.Vec3(x, -height / 2, z));
+    const angle = (i / numSegments) * 2 * Math.PI;
+    vertices.push(new CANNON.Vec3(radius * Math.cos(angle), -height / 2, radius * Math.sin(angle)));
   }
-  // Side faces: order vertices so normals point outward.
   for (let i = 1; i <= numSegments; i++) {
-    const next = (i % numSegments) + 1;
-    faces.push([0, next, i]); // reversed order to ensure CCW ordering
+    faces.push([0, i, i % numSegments + 1]);
   }
-  // Base face: reverse order.
-  const baseFace = [];
-  for (let i = 1; i <= numSegments; i++) {
-    baseFace.push(i);
-  }
-  baseFace.reverse();
-  faces.push(baseFace);
-
+  const base = [];
+  for (let i = 1; i <= numSegments; i++) base.push(i);
+  faces.push(base.reverse());
   return new CANNON.ConvexPolyhedron({ vertices, faces });
 }
+
 
 init();
 animate();
@@ -54,16 +42,24 @@ function init() {
   // Physics World Setup
   // -------------------------
   world = new CANNON.World();
-  world.gravity.set(0, -9.82, 0);
+  world.gravity.set(0, -25, 0); // Increased gravity
   world.broadphase = new CANNON.NaiveBroadphase();
-  // Increase solver iterations for a stiffer constraint.
   world.solver.iterations = 20;
 
   // -------------------------
   // Scene Setup
   // -------------------------
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xffffff);
+  scene.background = new THREE.Color(0x111133); // Darker background
+
+  // Lights
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+  scene.add(ambientLight);
+
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  directionalLight.position.set(5, 10, 7.5);
+  scene.add(directionalLight);
+
 
   // Camera
   camera = new THREE.PerspectiveCamera(
@@ -73,7 +69,7 @@ function init() {
   camera.lookAt(new THREE.Vector3(0, 0, 0));
 
   // Renderer
-  renderer = new THREE.WebGLRenderer();
+  renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   document.body.appendChild(renderer.domElement);
 
@@ -81,7 +77,8 @@ function init() {
   // Claw Machine (Outer Frame)
   // -------------------------
   let geometry = new THREE.BoxGeometry(8.75, 10, 8.75);
-  let material = new THREE.MeshBasicMaterial({ color: 0xcccccc, wireframe: true });
+  // Using a standard material now, not wireframe
+  let material = new THREE.MeshStandardMaterial({ color: 0xcccccc, transparent: true, opacity: 0.2 });
   clawMachine = new THREE.Mesh(geometry, material);
   clawMachine.position.set(0, 0, 0);
   scene.add(clawMachine);
@@ -90,7 +87,7 @@ function init() {
   // Claw Gantry
   // -------------------------
   geometry = new THREE.BoxGeometry(2.5, 0.25, 2.5);
-  material = new THREE.MeshBasicMaterial({ color: 0xffa500 });
+  material = new THREE.MeshStandardMaterial({ color: 0xffa500 });
   clawGantry = new THREE.Mesh(geometry, material);
   clawGantry.position.set(0, 5, 0);
   scene.add(clawGantry);
@@ -99,107 +96,149 @@ function init() {
   gantryBody = new CANNON.Body({ mass: 300 });
   gantryBody.addShape(gantryShape);
   gantryBody.position.set(0, 5, 0);
-  gantryBody.linearDamping = 0.3;
+  gantryBody.linearDamping = 0.5; // A bit of damping helps with stopping
   gantryBody.linearFactor.set(1, 0, 1);
   gantryBody.angularFactor.set(0, 0, 0);
   world.addBody(gantryBody);
 
   // -------------------------
-  // Compound Claw Body (Physics) as a Cone with Arms
+  // Claw Base (Physics) - NOW A BOTTOM-HEAVY CONE
   // -------------------------
-  const coneHeight = 1;
-  const coneRadius = 0.5;
-  const numConeSegments = 16;
-  const coneShape = createConeShape(coneHeight, coneRadius, numConeSegments);
-  // Shift the cone so that its tip is at (0,0,0) and subtract comShift.
-  clawBody = new CANNON.Body({ mass: 200 });
-  clawBody.addShape(coneShape, new CANNON.Vec3(0, -coneHeight / 2 - comShift, 0));
+  const baseRadius = 0.5;
+  const baseHeight = 0.5;
+  const clawBaseShape = createConeShape(baseRadius, baseHeight, 16);
+  clawBody = new CANNON.Body({ mass: 150, linearDamping: 0.2, angularDamping: 0.5 });
+  // Add the shape with an offset to lower the center of mass
+  clawBody.addShape(clawBaseShape, new CANNON.Vec3(0, -baseHeight / 2, 0));
+  clawBody.position.set(0, 3, 0);
+  world.addBody(clawBody);
 
-  // Add three arms as cylinders.
+  // -------------------------
+  // Claw Arms (Physics & Visuals) - REFACTORED
+  // -------------------------
+  const armLength = 1.5;
+  const armWidth = 0.1;
+  const fingerLength = 0.4;
+  const comShift = 0.5; // How much to shift the center of mass down to make it bottom-heavy
+
   for (let i = 0; i < 3; i++) {
     const angle = (i * 2 * Math.PI) / 3;
-    const offset = new CANNON.Vec3(
-      coneRadius * Math.cos(angle),
-      -coneHeight - armLength / 2 - comShift,
-      coneRadius * Math.sin(angle)
+
+    // --- Compound Physics Body for the Arm ---
+    const armBody = new CANNON.Body({ mass: 25, angularDamping: 0.5 }); // Added angular damping
+
+    // Main arm part
+    const mainArmShape = new CANNON.Box(new CANNON.Vec3(armWidth / 2, armLength / 2, armWidth / 2));
+    armBody.addShape(mainArmShape, new CANNON.Vec3(0, -armLength / 2 - comShift, 0)); // Shifted down
+
+    // Finger part
+    const fingerShape = new CANNON.Box(new CANNON.Vec3(fingerLength / 2, armWidth / 2, armWidth / 2));
+    const fingerPosition = new CANNON.Vec3(fingerLength / 2, -armLength + (armWidth / 2) - comShift, 0); // Shifted down
+    armBody.addShape(fingerShape, fingerPosition);
+
+    // Position and orient the entire arm body
+    const startX = baseRadius * Math.cos(angle);
+    const startZ = baseRadius * Math.sin(angle);
+    armBody.position.set(
+      clawBody.position.x + startX,
+      clawBody.position.y - baseHeight / 2,
+      clawBody.position.z + startZ
     );
-    const armShape = new CANNON.Cylinder(0.05, 0.05, armLength, 32);
-    let armQuat = new CANNON.Quaternion();
-    let defaultDir = new THREE.Vector3(0, -1, 0);
-    let desiredDir = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle)).normalize();
-    let q = new THREE.Quaternion();
-    q.setFromUnitVectors(defaultDir, desiredDir);
-    armQuat.set(q.x, q.y, q.z, q.w);
-    clawBody.addShape(armShape, offset, armQuat);
+    const armQuaternion = new CANNON.Quaternion().setFromEuler(0, angle, 0);
+    armBody.quaternion.copy(armQuaternion);
+
+    world.addBody(armBody);
+    armBodies.push(armBody);
+
+    // --- Hinge Constraint with Limits ---
+    const pivot = new CANNON.Vec3(0, 0, 0);
+    // Position and orient the entire arm body
+    const startX = baseRadius * Math.cos(angle);
+    const startZ = baseRadius * Math.sin(angle);
+    armBody.position.set(
+      clawBody.position.x + startX,
+      clawBody.position.y - baseHeight / 2,
+      clawBody.position.z + startZ
+    );
+    // Start the arm in the "open" position
+    const openAngle = Math.PI / 6;
+    const armQuaternion = new CANNON.Quaternion().setFromEuler(0, angle, openAngle);
+    armBody.quaternion.copy(armQuaternion);
+
+    world.addBody(armBody);
+    armBodies.push(armBody);
+
+    // --- Hinge Constraint with Limits ---
+    const pivot = new CANNON.Vec3(0, 0, 0);
+    const axisA = new CANNON.Vec3(Math.sin(angle), 0, -Math.cos(angle));
+    const axisB = new CANNON.Vec3(0, 0, 1);
+
+    const constraint = new CANNON.HingeConstraint(clawBody, armBody, {
+      pivotA: new CANNON.Vec3(startX, -baseHeight / 2, startZ),
+      pivotB: pivot,
+      axisA: axisA,
+      axisB: axisB,
+    });
+    
+    // Define the rotational limits for the hinge
+    constraint.lowerLimit = -Math.PI / 8; // Closed position
+    constraint.upperLimit = openAngle;  // Open position
+    world.addConstraint(constraint);
+    armConstraints.push(constraint);
+
+    // --- Visual Arm Group ---
+    const armMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+    const armGroup = new THREE.Group();
+    // The visual group's rotation will be set in the animation loop, so we only need to build the shapes
+    armGroup.quaternion.copy(armQuaternion); // Set initial visual rotation
+
+    // Main arm mesh
+    const mainArmGeometry = new THREE.BoxGeometry(armWidth, armLength, armWidth);
+    const mainArmMesh = new THREE.Mesh(mainArmGeometry, armMaterial);
+    mainArmMesh.position.set(0, -armLength / 2 - comShift, 0); // Shifted down
+    armGroup.add(mainArmMesh);
+
+    // Finger mesh
+    const fingerGeometry = new THREE.BoxGeometry(fingerLength, armWidth, armWidth);
+    const fingerMesh = new THREE.Mesh(fingerGeometry, armMaterial);
+    fingerMesh.position.set(fingerLength / 2, -armLength + (armWidth / 2) - comShift, 0); // Shifted down
+    armGroup.add(fingerMesh);
+    
+    scene.add(armGroup);
+    armMeshes.push(armGroup);
   }
-  clawBody.position.set(0, 3, 0);
-  // Optional: add extra damping to the claw for stability.
-  clawBody.angularDamping = 0.5;
-  clawBody.linearDamping = 0.1;
-  world.addBody(clawBody);
+
+
+  // -------------------------
+  // Visual Claw Base
+  // -------------------------
+  const clawBaseGeometry = new THREE.ConeGeometry(baseRadius, baseHeight, 16);
+  const clawBaseMaterial = new THREE.MeshStandardMaterial({ color: 0x800080 });
+  clawBase = new THREE.Mesh(clawBaseGeometry, clawBaseMaterial);
+  // Apply the same offset as the physics shape so they align
+  clawBase.position.y = -baseHeight / 2;
+  
+  // We'll create a group to hold the base and arms for easier syncing
+  clawGroup = new THREE.Group();
+  clawGroup.add(clawBase);
+  scene.add(clawGroup);
+
 
   // -------------------------
   // Hang Constraint
   // -------------------------
-  // Compute the initial cable length from the gantry's bottom-center to the claw tip.
-  // For the gantry (a box of height 0.25), the bottom-center is 0.125 below its center.
-  let gantryCableAttach = new THREE.Vector3(
-    gantryBody.position.x,
-    gantryBody.position.y - 0.125,
-    gantryBody.position.z
-  );
-  // The cone tip is at the claw group's origin (we've translated the cone so its tip is at (0,0,0)).
-  let clawTip = new THREE.Vector3().copy(clawBody.position); // because clawBase will match clawBody
+  let gantryCableAttach = new THREE.Vector3().copy(gantryBody.position);
+  let clawTip = new THREE.Vector3().copy(clawBody.position);
   initialCableLength = gantryCableAttach.distanceTo(clawTip);
   cableLength = initialCableLength;
   hangConstraint = new CANNON.DistanceConstraint(gantryBody, clawBody, cableLength);
   world.addConstraint(hangConstraint);
 
-  // -------------------------
-  // Visual Claw (for rendering & animations)
-  // -------------------------
-  clawBase = new THREE.Group();
-  let coneGeometry = new THREE.ConeGeometry(coneRadius, coneHeight, 32);
-  // Translate so that the tip is at (0,0,0).
-  coneGeometry.translate(0, -coneHeight / 2, 0);
-  let coneMaterial = new THREE.MeshBasicMaterial({ color: 0x800080, wireframe: true });
-  let coneMesh = new THREE.Mesh(coneGeometry, coneMaterial);
-  clawBase.add(coneMesh);
-
-  clawArms = [];
-  for (let i = 0; i < 3; i++) {
-    const angle = (i * 2 * Math.PI) / 3;
-    let armGeometry = new THREE.CylinderGeometry(0.05, 0.05, armLength, 32);
-    // Translate so that the arm's top is at (0,0,0).
-    armGeometry.translate(0, -armLength / 2, 0);
-    let armMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-    let armMesh = new THREE.Mesh(armGeometry, armMaterial);
-
-    let armGroup = new THREE.Group();
-    // Set the group's position to the attachment point on the cone's base.
-    armGroup.position.set(
-      coneRadius * Math.cos(angle),
-      -coneHeight,
-      coneRadius * Math.sin(angle)
-    );
-    let defaultDirThree = new THREE.Vector3(0, -1, 0);
-    let desiredDirThree = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle)).normalize();
-    let qThree = new THREE.Quaternion();
-    qThree.setFromUnitVectors(defaultDirThree, desiredDirThree);
-    armGroup.quaternion.copy(qThree);
-
-    armGroup.add(armMesh);
-    clawBase.add(armGroup);
-    clawArms.push(armGroup);
-  }
-  clawBase.position.copy(clawBody.position);
-  scene.add(clawBase);
 
   // -------------------------
   // Cable / Spline
   // -------------------------
-  // Draw the cable from the gantry's bottom-center to the claw tip.
-  cord = drawSpline(gantryCableAttach, clawBase.position, 0x000000);
+  cord = drawSpline(gantryBody.position, clawBody.position, 0xaaaaaa);
   scene.add(cord);
 
   // -------------------------
@@ -207,27 +246,22 @@ function init() {
   // -------------------------
   prizes = [];
   prizeBodies = [];
-  for (let i = 0; i < 5; i++) {
-    let size = Math.random() * 0.5 + 0.5;
+  for (let i = 0; i < 10; i++) { // More prizes
+    let size = Math.random() * 0.4 + 0.4;
     let prizeGeometry = new THREE.BoxGeometry(size, size, size);
-    let prizeMaterial = new THREE.MeshBasicMaterial({ color: Math.random() * 0xffffff });
+    let prizeMaterial = new THREE.MeshStandardMaterial({ color: Math.random() * 0xffffff });
     let prize = new THREE.Mesh(prizeGeometry, prizeMaterial);
-    prize.position.set(
-      Math.random() * 7 - 3.5,
-      0,
-      Math.random() * 7 - 3.5
-    );
+    
+    const prizeX = Math.random() * 7 - 3.5;
+    const prizeZ = Math.random() * 7 - 3.5;
+    prize.position.set(prizeX, -5 + size / 2, prizeZ);
     scene.add(prize);
     prizes.push(prize);
 
     let prizeShape = new CANNON.Box(new CANNON.Vec3(size / 2, size / 2, size / 2));
-    let prizeBody = new CANNON.Body({ mass: Math.random() + 0.1 });
+    let prizeBody = new CANNON.Body({ mass: 5 }); // Give prizes some mass
     prizeBody.addShape(prizeShape);
-    prizeBody.position.set(
-      Math.random() * 7 - 3.5,
-      0,
-      Math.random() * 7 - 3.5
-    );
+    prizeBody.position.set(prizeX, -4.5 + size / 2, prizeZ); // Set the physics body position
     world.addBody(prizeBody);
     prizeBodies.push(prizeBody);
   }
@@ -236,7 +270,7 @@ function init() {
   // Floor (Visual & Physics)
   // -------------------------
   const floorGeometry = new THREE.PlaneGeometry(8.75, 8.75);
-  const floorMaterial = new THREE.MeshBasicMaterial({ color: 0xcccccc, side: THREE.DoubleSide });
+  const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x333333, side: THREE.DoubleSide });
   const floor = new THREE.Mesh(floorGeometry, floorMaterial);
   floor.rotation.x = Math.PI / 2;
   floor.position.y = -5;
@@ -249,115 +283,74 @@ function init() {
   floorBody.position.set(0, -5, 0);
   world.addBody(floorBody);
 
-  // -------------------------
-  // Walls (Visual & Physics)
-  // -------------------------
-  const wallMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.2 });
-  const wallShapes = [
-    new THREE.PlaneGeometry(8.75, 10),
-    new THREE.PlaneGeometry(8.75, 10),
-    new THREE.PlaneGeometry(8.75, 10),
-    new THREE.PlaneGeometry(8.75, 10),
-  ];
+  // Walls (Physics only) - CORRECTED
+  const wallMaterial = new CANNON.Material('wall');
   const wallPositions = [
-    { x: -4.375, y: 0, z: 0 },
-    { x: 4.375, y: 0, z: 0 },
-    { x: 0, y: 0, z: -4.375 },
-    { x: 0, y: 0, z: 4.375 },
-  ];
-  const wallRotations = [
-    { x: 0, y: Math.PI / 2, z: 0 },
-    { x: 0, y: -Math.PI / 2, z: 0 },
-    { x: 0, y: 0, z: 0 },
-    { x: 0, y: Math.PI, z: 0 },
+      { pos: [4.375, 0, 0], quat: new CANNON.Quaternion().setFromEuler(0, -Math.PI / 2, 0) },
+      { pos: [-4.375, 0, 0], quat: new CANNON.Quaternion().setFromEuler(0, Math.PI / 2, 0) },
+      { pos: [0, 0, 4.375], quat: new CANNON.Quaternion().setFromEuler(0, Math.PI, 0) },
+      { pos: [0, 0, -4.375], quat: new CANNON.Quaternion().setFromEuler(0, 0, 0) }
   ];
 
-  wallShapes.forEach((shape, index) => {
-    const wallMesh = new THREE.Mesh(shape, wallMaterial);
-    wallMesh.position.set(
-      wallPositions[index].x,
-      wallPositions[index].y,
-      wallPositions[index].z
-    );
-    wallMesh.rotation.set(
-      wallRotations[index].x,
-      wallRotations[index].y,
-      wallRotations[index].z
-    );
-    scene.add(wallMesh);
-
-    const wallShape = new CANNON.Plane();
-    const wallBody = new CANNON.Body({ mass: 0 });
-    wallBody.addShape(wallShape);
-    wallBody.position.set(
-      wallPositions[index].x,
-      wallPositions[index].y,
-      wallPositions[index].z
-    );
-    wallBody.quaternion.setFromEuler(
-      wallRotations[index].x,
-      wallRotations[index].y,
-      wallRotations[index].z
-    );
-    world.addBody(wallBody);
+  wallPositions.forEach(data => {
+      const wallBody = new CANNON.Body({ mass: 0, material: wallMaterial });
+      wallBody.addShape(new CANNON.Plane());
+      wallBody.position.set(...data.pos);
+      wallBody.quaternion.copy(data.quat);
+      world.addBody(wallBody);
   });
+
 
   // -------------------------
   // UI Event Listeners
   // -------------------------
   const leftButton = document.getElementById('left');
+  const rightButton = document.getElementById('right');
+  const forwardButton = document.getElementById('forward');
+  const backwardButton = document.getElementById('backward');
+  grabButton = document.getElementById('drop');
+
+  // Mouse events
   leftButton.addEventListener('mousedown', () => startMoving('left'));
   leftButton.addEventListener('mouseup', stopMoving);
-
-  const rightButton = document.getElementById('right');
   rightButton.addEventListener('mousedown', () => startMoving('right'));
   rightButton.addEventListener('mouseup', stopMoving);
-
-  const forwardButton = document.getElementById('forward');
   forwardButton.addEventListener('mousedown', () => startMoving('forward'));
   forwardButton.addEventListener('mouseup', stopMoving);
-
-  const backwardButton = document.getElementById('backward');
   backwardButton.addEventListener('mousedown', () => startMoving('backward'));
   backwardButton.addEventListener('mouseup', stopMoving);
 
-  grabButton = document.getElementById('drop');
+  // Touch events
+  leftButton.addEventListener('touchstart', (e) => { e.preventDefault(); startMoving('left'); });
+  leftButton.addEventListener('touchend', (e) => { e.preventDefault(); stopMoving(); });
+  rightButton.addEventListener('touchstart', (e) => { e.preventDefault(); startMoving('right'); });
+  rightButton.addEventListener('touchend', (e) => { e.preventDefault(); stopMoving(); });
+  forwardButton.addEventListener('touchstart', (e) => { e.preventDefault(); startMoving('forward'); });
+  forwardButton.addEventListener('touchend', (e) => { e.preventDefault(); stopMoving(); });
+  backwardButton.addEventListener('touchstart', (e) => { e.preventDefault(); startMoving('backward'); });
+  backwardButton.addEventListener('touchend', (e) => { e.preventDefault(); stopMoving(); });
+
   grabButton.addEventListener('click', () => dropClaw());
+  grabButton.addEventListener('touchstart', (e) => { e.preventDefault(); dropClaw(); });
 
   window.addEventListener('mouseup', stopMoving);
 
   // Keyboard event listeners
   window.addEventListener('keydown', (event) => {
+    if (event.repeat) return;
     switch (event.key) {
-      case 'ArrowLeft':
-        startMoving('left');
-        break;
-      case 'ArrowRight':
-        startMoving('right');
-        break;
-      case 'ArrowUp':
-        startMoving('forward');
-        break;
-      case 'ArrowDown':
-        startMoving('backward');
-        break;
-      case ' ':
-        dropClaw();
-        break;
-      default:
-        break;
+      case 'ArrowLeft': startMoving('left'); break;
+      case 'ArrowRight': startMoving('right'); break;
+      case 'ArrowUp': startMoving('forward'); break;
+      case 'ArrowDown': startMoving('backward'); break;
+      case ' ': dropClaw(); break;
     }
   });
 
   window.addEventListener('keyup', (event) => {
     switch (event.key) {
-      case 'ArrowLeft':
-      case 'ArrowRight':
-      case 'ArrowUp':
-      case 'ArrowDown':
+      case 'ArrowLeft': case 'ArrowRight': case 'ArrowUp': case 'ArrowDown':
         stopMoving();
-        break;
-      default:
         break;
     }
   });
@@ -373,51 +366,31 @@ function init() {
     camera.lookAt(new THREE.Vector3(0, 0, 0));
   });
 
-  // -------------------------
   // Initialize Joystick for Mobile
-  // -------------------------
-  // (For example, only enable the joystick if the viewport width is less than 768px)
   if (window.innerWidth <= 768) {
     const joystickContainer = document.getElementById('joystickContainer');
-    // Create the joystick in static mode at the center of the container.
     const joystickManager = nipplejs.create({
       zone: joystickContainer,
       mode: 'static',
       position: { left: '50%', top: '50%' },
-      color: 'blue',
+      color: 'white',
       size: 100,
     });
-
     joystickManager.on('move', (evt, data) => {
       if (data && data.vector) {
-        // Use the vector to choose one direction:
-        // Compare the absolute x and y components to choose horizontal or vertical movement.
         const { x, y } = data.vector;
         if (Math.abs(x) > Math.abs(y)) {
-          if (x > 0) {
-            startMoving('right');
-          } else {
-            startMoving('left');
-          }
+          moveDirection = x > 0 ? 'right' : 'left';
         } else {
-          if (y > 0) {
-            startMoving('forward');
-          } else {
-            startMoving('backward');
-          }
+          moveDirection = y > 0 ? 'forward' : 'backward';
         }
       }
     });
-
     joystickManager.on('end', () => {
       stopMoving();
     });
   }
-
-  console.log('Camera position:', camera.position);
-  console.log('Claw base position:', clawBase.position);
-  console.log('Claw arms positions:', clawArms.map(arm => arm.position));
-  console.log('Prizes positions:', prizes.map(prize => prize.position));
+  openClaw(); // Start with the claw open
 }
 
 function onWindowResize() {
@@ -429,23 +402,26 @@ function onWindowResize() {
 function animate() {
   requestAnimationFrame(animate);
 
-  if (moveDirection) applyForceToGantry(moveDirection);
+  // New: Update gantry velocity in the animation loop for continuous movement
+  if (moveDirection) moveGantry(moveDirection);
 
   world.step(1 / 60);
 
+  // Update visuals to match physics
   clawGantry.position.copy(gantryBody.position);
   clawGantry.quaternion.copy(gantryBody.quaternion);
 
-  clawBase.position.copy(clawBody.position);
-  clawBase.quaternion.copy(clawBody.quaternion);
+  clawGroup.position.copy(clawBody.position);
+  clawGroup.quaternion.copy(clawBody.quaternion);
 
-  let gantryCableAttach = new THREE.Vector3(
-    gantryBody.position.x,
-    gantryBody.position.y - 0.125,
-    gantryBody.position.z
-  );
+  // Update each arm
+  for (let i = 0; i < armBodies.length; i++) {
+    armMeshes[i].position.copy(armBodies[i].position);
+    armMeshes[i].quaternion.copy(armBodies[i].quaternion);
+  }
+
   scene.remove(cord);
-  cord = drawSpline(gantryCableAttach, clawBase.position, 0x000000);
+  cord = drawSpline(gantryBody.position, clawBody.position, 0xaaaaaa);
   scene.add(cord);
 
   prizes.forEach((prize, index) => {
@@ -457,93 +433,446 @@ function animate() {
 }
 
 function startMoving(direction) {
-  console.log('Starting movement:', direction);
   moveDirection = direction;
 }
 
 function stopMoving() {
-  console.log('Stopping movement');
   moveDirection = null;
+  // Instantly stop the gantry
+  gantryBody.velocity.set(0, 0, 0);
 }
 
-function applyForceToGantry(direction) {
-  const force = new CANNON.Vec3();
+function moveGantry(direction) {
+  const velocity = new CANNON.Vec3();
   switch (direction) {
     case 'left':
-      if (gantryBody.position.x > clawLimits.x[0]) {
-        force.set(-clawSpeed, 0, 0);
-      }
+      if (gantryBody.position.x > clawLimits.x[0]) velocity.set(-clawSpeed, 0, 0);
       break;
     case 'right':
-      if (gantryBody.position.x < clawLimits.x[1]) {
-        force.set(clawSpeed, 0, 0);
-      }
+      if (gantryBody.position.x < clawLimits.x[1]) velocity.set(clawSpeed, 0, 0);
       break;
     case 'forward':
-      if (gantryBody.position.z > clawLimits.z[0]) {
-        force.set(0, 0, -clawSpeed);
-      }
+      if (gantryBody.position.z > clawLimits.z[0]) velocity.set(0, 0, -clawSpeed);
       break;
     case 'backward':
-      if (gantryBody.position.z < clawLimits.z[1]) {
-        force.set(0, 0, clawSpeed);
-      }
+      if (gantryBody.position.z < clawLimits.z[1]) velocity.set(0, 0, clawSpeed);
       break;
   }
-  gantryBody.applyForce(force, gantryBody.position);
+  gantryBody.velocity.copy(velocity);
 }
 
 function dropClaw() {
   if (!grabButton.disabled) {
     grabButton.disabled = true;
-    openClaw();
-    console.log('Dropping claw');
+    relaxClaw(); // Let arms dangle within limits on the way down
     let dropInterval = setInterval(() => {
-      if (cableLength < 5) {
+      // INCREASED drop length
+      if (cableLength < 8.5) {
         cableLength += dropSpeed;
         hangConstraint.distance = cableLength;
       } else {
         clearInterval(dropInterval);
-        closeClaw();
-        setTimeout(() => {
-          retractClaw();
-        }, 500);
+        closeClaw(); // Grab at the bottom
+        setTimeout(retractClaw, 1000); // Wait a bit before retracting
       }
     }, 50);
   }
 }
 
-function openClaw() {
-  clawArms.forEach(armGroup => armGroup.rotation.z = Math.PI / 3);
-}
-
-function closeClaw() {
-  clawArms.forEach(armGroup => armGroup.rotation.z = 0);
-}
-
 function retractClaw() {
-  openClaw();
   let retractInterval = setInterval(() => {
-    // Use the stored initialCableLength as the target instead of 1.
     if (cableLength > initialCableLength) {
-      cableLength -= dropSpeed;
+      cableLength -= dropSpeed * 2; // Retract faster
       hangConstraint.distance = cableLength;
     } else {
       clearInterval(retractInterval);
-      closeClaw();
+      openClaw(); // Open claw at the top, ready for next turn
       grabButton.disabled = false;
     }
   }, 50);
 }
 
+// --- NEW CLAW FUNCTIONS ---
+function openClaw() {
+  armConstraints.forEach(constraint => {
+    constraint.enableMotor();
+    constraint.setMotorSpeed( 0 ); // Hold position
+    constraint.setMotorMaxForce( 200 ); // Use a moderate force to hold open
+  });
+}
+
+function closeClaw() {
+  armConstraints.forEach(constraint => {
+    constraint.enableMotor();
+    constraint.setMotorSpeed( -5 ); // Negative speed to close quickly
+    constraint.setMotorMaxForce( 1000 ); // Strong grip
+  });
+}
+
+function relaxClaw() {
+    armConstraints.forEach(constraint => {
+        constraint.enableMotor();
+        constraint.setMotorSpeed(0); // Motor is on to enforce limits, but applies no force
+        constraint.setMotorMaxForce(100); // A low force allows gravity/collisions to move the arm
+    });
+}
+
+
 function drawSpline(start, end, color) {
-  let adjustedEnd = end.clone();
-  let midVector = new THREE.Vector3(
-    (start.x + adjustedEnd.x) / 2,
-    (start.y + adjustedEnd.y) / 2 - 1,
-    (start.z + adjustedEnd.z) / 2
-  );
-  let curve = new THREE.CatmullRomCurve3([start.clone(), midVector, adjustedEnd.clone()]);
+  let curve = new THREE.LineCurve3(start, end);
+  let points = curve.getPoints(20);
+  let geometry = new THREE.BufferGeometry().setFromPoints(points);
+  let material = new THREE.LineBasicMaterial({ color: color });
+  let curveObject = new THREE.Line(geometry, material);
+  return curveObject;
+}
+    const axisB = new CANNON.Vec3(0, 0, 1); // Hinge axis on the arm itself (local Z)
+
+    const constraint = new CANNON.HingeConstraint(clawBody, armBody, {
+      pivotA: new CANNON.Vec3(startX, -baseHeight / 2, startZ),
+      pivotB: pivot,
+      axisA: axisA,
+      axisB: axisB,
+    });
+    
+    // Define the rotational limits for the hinge
+    constraint.lowerLimit = -Math.PI / 8; // Closed position
+    constraint.upperLimit = Math.PI / 6;  // Open position
+    world.addConstraint(constraint);
+    armConstraints.push(constraint);
+
+    // --- Visual Arm Group ---
+    const armMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+    const armGroup = new THREE.Group();
+
+    // Main arm mesh
+    const mainArmGeometry = new THREE.BoxGeometry(armWidth, armLength, armWidth);
+    const mainArmMesh = new THREE.Mesh(mainArmGeometry, armMaterial);
+    mainArmMesh.position.set(0, -armLength / 2 - comShift, 0); // Shifted down
+    armGroup.add(mainArmMesh);
+
+    // Finger mesh
+    const fingerGeometry = new THREE.BoxGeometry(fingerLength, armWidth, armWidth);
+    const fingerMesh = new THREE.Mesh(fingerGeometry, armMaterial);
+    fingerMesh.position.set(fingerLength / 2, -armLength + (armWidth / 2) - comShift, 0); // Shifted down
+    armGroup.add(fingerMesh);
+    
+    scene.add(armGroup);
+    armMeshes.push(armGroup);
+  }
+
+
+  // -------------------------
+  // Visual Claw Base
+  // -------------------------
+  const clawBaseGeometry = new THREE.ConeGeometry(baseRadius, baseHeight, 16);
+  const clawBaseMaterial = new THREE.MeshStandardMaterial({ color: 0x800080 });
+  clawBase = new THREE.Mesh(clawBaseGeometry, clawBaseMaterial);
+  // Apply the same offset as the physics shape so they align
+  clawBase.position.y = -baseHeight / 2;
+  
+  // We'll create a group to hold the base and arms for easier syncing
+  clawGroup = new THREE.Group();
+  clawGroup.add(clawBase);
+  scene.add(clawGroup);
+
+
+  // -------------------------
+  // Hang Constraint
+  // -------------------------
+  let gantryCableAttach = new THREE.Vector3().copy(gantryBody.position);
+  let clawTip = new THREE.Vector3().copy(clawBody.position);
+  initialCableLength = gantryCableAttach.distanceTo(clawTip);
+  cableLength = initialCableLength;
+  hangConstraint = new CANNON.DistanceConstraint(gantryBody, clawBody, cableLength);
+  world.addConstraint(hangConstraint);
+
+
+  // -------------------------
+  // Cable / Spline
+  // -------------------------
+  cord = drawSpline(gantryBody.position, clawBody.position, 0xaaaaaa);
+  scene.add(cord);
+
+  // -------------------------
+  // Prizes
+  // -------------------------
+  prizes = [];
+  prizeBodies = [];
+  for (let i = 0; i < 10; i++) { // More prizes
+    let size = Math.random() * 0.4 + 0.4;
+    let prizeGeometry = new THREE.BoxGeometry(size, size, size);
+    let prizeMaterial = new THREE.MeshStandardMaterial({ color: Math.random() * 0xffffff });
+    let prize = new THREE.Mesh(prizeGeometry, prizeMaterial);
+    
+    const prizeX = Math.random() * 7 - 3.5;
+    const prizeZ = Math.random() * 7 - 3.5;
+    prize.position.set(prizeX, -5 + size / 2, prizeZ);
+    scene.add(prize);
+    prizes.push(prize);
+
+    let prizeShape = new CANNON.Box(new CANNON.Vec3(size / 2, size / 2, size / 2));
+    let prizeBody = new CANNON.Body({ mass: 5 }); // Give prizes some mass
+    prizeBody.addShape(prizeShape);
+    prizeBody.position.set(prizeX, -4.5 + size / 2, prizeZ); // Set the physics body position
+    world.addBody(prizeBody);
+    prizeBodies.push(prizeBody);
+  }
+
+  // -------------------------
+  // Floor (Visual & Physics)
+  // -------------------------
+  const floorGeometry = new THREE.PlaneGeometry(8.75, 8.75);
+  const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x333333, side: THREE.DoubleSide });
+  const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+  floor.rotation.x = Math.PI / 2;
+  floor.position.y = -5;
+  scene.add(floor);
+
+  const floorShape = new CANNON.Plane();
+  const floorBody = new CANNON.Body({ mass: 0 });
+  floorBody.addShape(floorShape);
+  floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+  floorBody.position.set(0, -5, 0);
+  world.addBody(floorBody);
+
+  // Walls (Physics only) - CORRECTED
+  const wallMaterial = new CANNON.Material('wall');
+  const wallPositions = [
+      { pos: [4.375, 0, 0], quat: new CANNON.Quaternion().setFromEuler(0, -Math.PI / 2, 0) },
+      { pos: [-4.375, 0, 0], quat: new CANNON.Quaternion().setFromEuler(0, Math.PI / 2, 0) },
+      { pos: [0, 0, 4.375], quat: new CANNON.Quaternion().setFromEuler(0, Math.PI, 0) },
+      { pos: [0, 0, -4.375], quat: new CANNON.Quaternion().setFromEuler(0, 0, 0) }
+  ];
+
+  wallPositions.forEach(data => {
+      const wallBody = new CANNON.Body({ mass: 0, material: wallMaterial });
+      wallBody.addShape(new CANNON.Plane());
+      wallBody.position.set(...data.pos);
+      wallBody.quaternion.copy(data.quat);
+      world.addBody(wallBody);
+  });
+
+
+  // -------------------------
+  // UI Event Listeners
+  // -------------------------
+  const leftButton = document.getElementById('left');
+  const rightButton = document.getElementById('right');
+  const forwardButton = document.getElementById('forward');
+  const backwardButton = document.getElementById('backward');
+  grabButton = document.getElementById('drop');
+
+  // Mouse events
+  leftButton.addEventListener('mousedown', () => startMoving('left'));
+  leftButton.addEventListener('mouseup', stopMoving);
+  rightButton.addEventListener('mousedown', () => startMoving('right'));
+  rightButton.addEventListener('mouseup', stopMoving);
+  forwardButton.addEventListener('mousedown', () => startMoving('forward'));
+  forwardButton.addEventListener('mouseup', stopMoving);
+  backwardButton.addEventListener('mousedown', () => startMoving('backward'));
+  backwardButton.addEventListener('mouseup', stopMoving);
+
+  // Touch events
+  leftButton.addEventListener('touchstart', (e) => { e.preventDefault(); startMoving('left'); });
+  leftButton.addEventListener('touchend', (e) => { e.preventDefault(); stopMoving(); });
+  rightButton.addEventListener('touchstart', (e) => { e.preventDefault(); startMoving('right'); });
+  rightButton.addEventListener('touchend', (e) => { e.preventDefault(); stopMoving(); });
+  forwardButton.addEventListener('touchstart', (e) => { e.preventDefault(); startMoving('forward'); });
+  forwardButton.addEventListener('touchend', (e) => { e.preventDefault(); stopMoving(); });
+  backwardButton.addEventListener('touchstart', (e) => { e.preventDefault(); startMoving('backward'); });
+  backwardButton.addEventListener('touchend', (e) => { e.preventDefault(); stopMoving(); });
+
+  grabButton.addEventListener('click', () => dropClaw());
+  grabButton.addEventListener('touchstart', (e) => { e.preventDefault(); dropClaw(); });
+
+  window.addEventListener('mouseup', stopMoving);
+
+  // Keyboard event listeners
+  window.addEventListener('keydown', (event) => {
+    if (event.repeat) return;
+    switch (event.key) {
+      case 'ArrowLeft': startMoving('left'); break;
+      case 'ArrowRight': startMoving('right'); break;
+      case 'ArrowUp': startMoving('forward'); break;
+      case 'ArrowDown': startMoving('backward'); break;
+      case ' ': dropClaw(); break;
+    }
+  });
+
+  window.addEventListener('keyup', (event) => {
+    switch (event.key) {
+      case 'ArrowLeft': case 'ArrowRight': case 'ArrowUp': case 'ArrowDown':
+        stopMoving();
+        break;
+    }
+  });
+
+  window.addEventListener('resize', onWindowResize, false);
+
+  const cameraSlider = document.getElementById('camera-slider');
+  cameraSlider.addEventListener('input', () => {
+    const angle = (cameraSlider.value / 360) * 2 * Math.PI;
+    const radius = 15;
+    camera.position.x = radius * Math.sin(angle);
+    camera.position.z = radius * Math.cos(angle);
+    camera.lookAt(new THREE.Vector3(0, 0, 0));
+  });
+
+  // Initialize Joystick for Mobile
+  if (window.innerWidth <= 768) {
+    const joystickContainer = document.getElementById('joystickContainer');
+    const joystickManager = nipplejs.create({
+      zone: joystickContainer,
+      mode: 'static',
+      position: { left: '50%', top: '50%' },
+      color: 'white',
+      size: 100,
+    });
+    joystickManager.on('move', (evt, data) => {
+      if (data && data.vector) {
+        const { x, y } = data.vector;
+        if (Math.abs(x) > Math.abs(y)) {
+          moveDirection = x > 0 ? 'right' : 'left';
+        } else {
+          moveDirection = y > 0 ? 'forward' : 'backward';
+        }
+      }
+    });
+    joystickManager.on('end', () => {
+      stopMoving();
+    });
+  }
+  openClaw(); // Start with the claw open
+}
+
+function onWindowResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  // New: Update gantry velocity in the animation loop for continuous movement
+  if (moveDirection) moveGantry(moveDirection);
+
+  world.step(1 / 60);
+
+  // Update visuals to match physics
+  clawGantry.position.copy(gantryBody.position);
+  clawGantry.quaternion.copy(gantryBody.quaternion);
+
+  clawGroup.position.copy(clawBody.position);
+  clawGroup.quaternion.copy(clawBody.quaternion);
+
+  // Update each arm
+  for (let i = 0; i < armBodies.length; i++) {
+    armMeshes[i].position.copy(armBodies[i].position);
+    armMeshes[i].quaternion.copy(armBodies[i].quaternion);
+  }
+
+  scene.remove(cord);
+  cord = drawSpline(gantryBody.position, clawBody.position, 0xaaaaaa);
+  scene.add(cord);
+
+  prizes.forEach((prize, index) => {
+    prize.position.copy(prizeBodies[index].position);
+    prize.quaternion.copy(prizeBodies[index].quaternion);
+  });
+
+  renderer.render(scene, camera);
+}
+
+function startMoving(direction) {
+  moveDirection = direction;
+}
+
+function stopMoving() {
+  moveDirection = null;
+  // Instantly stop the gantry
+  gantryBody.velocity.set(0, 0, 0);
+}
+
+function moveGantry(direction) {
+  const velocity = new CANNON.Vec3();
+  switch (direction) {
+    case 'left':
+      if (gantryBody.position.x > clawLimits.x[0]) velocity.set(-clawSpeed, 0, 0);
+      break;
+    case 'right':
+      if (gantryBody.position.x < clawLimits.x[1]) velocity.set(clawSpeed, 0, 0);
+      break;
+    case 'forward':
+      if (gantryBody.position.z > clawLimits.z[0]) velocity.set(0, 0, -clawSpeed);
+      break;
+    case 'backward':
+      if (gantryBody.position.z < clawLimits.z[1]) velocity.set(0, 0, clawSpeed);
+      break;
+  }
+  gantryBody.velocity.copy(velocity);
+}
+
+function dropClaw() {
+  if (!grabButton.disabled) {
+    grabButton.disabled = true;
+    relaxClaw(); // Let arms dangle within limits on the way down
+    let dropInterval = setInterval(() => {
+      // INCREASED drop length
+      if (cableLength < 8.5) {
+        cableLength += dropSpeed;
+        hangConstraint.distance = cableLength;
+      } else {
+        clearInterval(dropInterval);
+        closeClaw(); // Grab at the bottom
+        setTimeout(retractClaw, 1000); // Wait a bit before retracting
+      }
+    }, 50);
+  }
+}
+
+function retractClaw() {
+  let retractInterval = setInterval(() => {
+    if (cableLength > initialCableLength) {
+      cableLength -= dropSpeed * 2; // Retract faster
+      hangConstraint.distance = cableLength;
+    } else {
+      clearInterval(retractInterval);
+      openClaw(); // Open claw at the top, ready for next turn
+      grabButton.disabled = false;
+    }
+  }, 50);
+}
+
+// --- NEW CLAW FUNCTIONS ---
+function openClaw() {
+  armConstraints.forEach(constraint => {
+    constraint.enableMotor();
+    constraint.setMotorSpeed( 5 ); // Positive speed to open quickly
+    constraint.setMotorMaxForce( 500 ); 
+  });
+}
+
+function closeClaw() {
+  armConstraints.forEach(constraint => {
+    constraint.enableMotor();
+    constraint.setMotorSpeed( -5 ); // Negative speed to close quickly
+    constraint.setMotorMaxForce( 1000 ); // Strong grip
+  });
+}
+
+function relaxClaw() {
+    armConstraints.forEach(constraint => {
+        constraint.enableMotor();
+        constraint.setMotorSpeed(0); // Motor is on to enforce limits, but applies no force
+        constraint.setMotorMaxForce(100); // A low force allows gravity/collisions to move the arm
+    });
+}
+
+
+function drawSpline(start, end, color) {
+  let curve = new THREE.LineCurve3(start, end);
   let points = curve.getPoints(20);
   let geometry = new THREE.BufferGeometry().setFromPoints(points);
   let material = new THREE.LineBasicMaterial({ color: color });
